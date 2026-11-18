@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grass Shader</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #0a0a0a; font-family: system-ui, sans-serif; }
+    canvas { display: block; }
+    #ui {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      color: #fff;
+      background: rgba(0,0,0,0.6);
+      padding: 16px;
+      border-radius: 12px;
+      backdrop-filter: blur(8px);
+      z-index: 10;
+      max-width: 280px;
+    }
+    #ui h1 { margin: 0 0 8px; font-size: 1.2rem; }
+    #ui label { display: block; margin: 8px 0 4px; font-size: 0.85rem; opacity: 0.9; }
+    #ui input[type=range] { width: 100%; }
+    #ui button { margin-top: 8px; padding: 6px 12px; border: none; border-radius: 6px; background: #2d5a27; color: white; cursor: pointer; }
+    #ui button:hover { background: #3a7a32; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="ui">
+    <h1>Grass Shader</h1>
+    <label>Time <span id="timeVal">0</span></label>
+    <input type="range" id="time" min="0" max="10" step="0.01" value="2">
+    <label><input type="checkbox" id="paused" checked> Paused</label>
+    <label><input type="checkbox" id="compare"> Compare mode</label>
+    <button id="reset">Reset camera</button>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    const params = new URLSearchParams(window.location.search);
+    const initialT = parseFloat(params.get('t') || '2');
+    const paused = params.get('paused') === '1';
+    const compare = params.get('compare') === '1';
+
+    const timeSlider = document.getElementById('time');
+    const timeVal = document.getElementById('timeVal');
+    const pausedCheck = document.getElementById('paused');
+    const compareCheck = document.getElementById('compare');
+    timeSlider.value = initialT;
+    pausedCheck.checked = paused;
+    compareCheck.checked = compare;
+    timeVal.textContent = initialT.toFixed(2);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87ceeb);
+    scene.fog = new THREE.Fog(0x87ceeb, 10, 50);
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 2, 8);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    // Ground
+    const groundGeo = new THREE.PlaneGeometry(40, 40);
+    const groundMat = new THREE.MeshLambertMaterial({ color: 0x3a5a2a });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    scene.add(ground);
+
+    // Lights
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
+    scene.add(hemi);
+    const dir = new THREE.DirectionalLight(0xffffff, 1);
+    dir.position.set(5, 10, 2);
+    scene.add(dir);
+
+    // Procedural grass
+    const BLADE_COUNT = 15000;
+    const grassGeo = new THREE.BufferGeometry();
+    const positions = [];
+    const offsets = [];
+    const heights = [];
+    const bends = [];
+
+    for (let i = 0; i < BLADE_COUNT; i++) {
+      const x = (Math.random() - 0.5) * 30;
+      const z = (Math.random() - 0.5) * 30;
+      const h = 0.3 + Math.random() * 0.5;
+      const bend = Math.random() * Math.PI * 2;
+
+      // 3 vertices per blade (simple triangle)
+      positions.push(x, 0, z);
+      positions.push(x + 0.02, 0, z);
+      positions.push(x + 0.01, h, z);
+
+      offsets.push(x, z, x, z, x, z);
+      heights.push(h, h, h);
+      bends.push(bend, bend, bend);
+    }
+
+    grassGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    grassGeo.setAttribute('offset', new THREE.Float32BufferAttribute(offsets, 2));
+    grassGeo.setAttribute('height', new THREE.Float32BufferAttribute(heights, 1));
+    grassGeo.setAttribute('bend', new THREE.Float32BufferAttribute(bends, 1));
+
+    const grassMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: initialT },
+        uWindStrength: { value: 0.15 },
+        uCompare: { value: compare ? 1.0 : 0.0 }
+      },
+      vertexShader: `
+        attribute vec2 offset;
+        attribute float height;
+        attribute float bend;
+        uniform float uTime;
+        uniform float uWindStrength;
+        varying float vHeight;
+        varying vec3 vWorldPos;
+
+        void main() {
+          vec3 pos = position;
+          float wind = sin(uTime * 1.5 + offset.x * 0.5 + offset.y * 0.3) * uWindStrength * height;
+          pos.x += wind * (position.y / height);
+          pos.z += cos(uTime * 1.2 + bend) * uWindStrength * 0.5 * (position.y / height);
+
+          vHeight = position.y / height;
+          vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform float uCompare;
+        varying float vHeight;
+        varying vec3 vWorldPos;
+
+        void main() {
+          vec3 base = mix(vec3(0.15, 0.35, 0.1), vec3(0.4, 0.7, 0.25), vHeight);
+          vec3 tip = vec3(0.6, 0.9, 0.4);
+          vec3 color = mix(base, tip, vHeight * 0.7);
+
+          // Simple lighting
+          float light = 0.6 + 0.4 * max(0.0, dot(normalize(vec3(0.5, 1.0, 0.3)), vec3(0.0, 1.0, 0.0)));
+          color *= light;
+
+          if (uCompare > 0.5) {
+            color = mix(color, vec3(0.8, 0.4, 0.9), 0.3); // tint for compare
+          }
+
+          gl_FragColor = vec4(color, 1.0);
+        }
+      `,
+      side: THREE.DoubleSide
+    });
+
+    const grass = new THREE.Mesh(grassGeo, grassMat);
+    scene.add(grass);
+
+    let animTime = initialT;
+    let isPaused = paused;
+
+    function animate() {
+      requestAnimationFrame(animate);
+      if (!isPaused) {
+        animTime += 0.016;
+        timeSlider.value = animTime % 10;
+        timeVal.textContent = (animTime % 10).toFixed(2);
+      }
+      grassMat.uniforms.uTime.value = parseFloat(timeSlider.value);
+      grassMat.uniforms.uCompare.value = compareCheck.checked ? 1.0 : 0.0;
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    timeSlider.addEventListener('input', () => {
+      timeVal.textContent = parseFloat(timeSlider.value).toFixed(2);
+    });
+    pausedCheck.addEventListener('change', () => { isPaused = pausedCheck.checked; });
+    document.getElementById('reset').addEventListener('click', () => {
+      camera.position.set(0, 2, 8);
+      controls.reset();
+    });
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>

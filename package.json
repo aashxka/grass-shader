@@ -1,0 +1,10 @@
+{
+  "name": "grass-shader",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Procedural grass shader with Three.js",
+  "scripts": {
+    "dev": "serve .",
+    "start": "serve ."
+  }
+}
